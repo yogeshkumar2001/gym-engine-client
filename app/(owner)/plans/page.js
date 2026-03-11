@@ -1,7 +1,8 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import dynamic from 'next/dynamic';
 import { planApi } from '@/lib/api';
 import StatCard from '@/components/shared/StatCard';
 import LoadingSpinner from '@/components/shared/LoadingSpinner';
@@ -15,22 +16,25 @@ import { Label } from '@/components/ui/label';
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
-import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
-import { ClipboardList, Users, TrendingUp, Star, Plus, Pencil, Trash2 } from 'lucide-react';
+import {
+  ClipboardList, Users, TrendingUp, Star, Plus, RefreshCw,
+} from 'lucide-react';
+
+// Tabulator — client only
+const TabulatorTable = dynamic(() => import('@/components/shared/TabulatorTable'), { ssr: false });
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function fmtAmount(v) {
   return v != null ? `₹${Number(v).toLocaleString('en-IN')}` : '—';
 }
 
-const SORT_OPTIONS = [
-  { label: 'Default',        value: '' },
-  { label: 'Price',          value: 'price' },
-  { label: 'Duration',       value: 'duration_days' },
-  { label: 'Revenue',        value: 'revenue_generated' },
-  { label: 'Active Members', value: 'active_members' },
-];
+function fmtRevenue(v) {
+  if (v == null) return '—';
+  return v >= 1000
+    ? `₹${(v / 1000).toFixed(1)}k`
+    : `₹${Number(v).toLocaleString('en-IN')}`;
+}
 
 const EMPTY_FORM = { name: '', duration_days: '', price: '', status: 'active' };
 
@@ -116,8 +120,8 @@ function AddPlanDialog({ open, onOpenChange }) {
     }),
     onSuccess: () => {
       toast.success('Plan created.');
-      qc.invalidateQueries({ queryKey: ['plans'] });
-      qc.invalidateQueries({ queryKey: ['plans-summary'] });
+      qc.refetchQueries({ queryKey: ['plans'] });
+      qc.refetchQueries({ queryKey: ['plans-summary'] });
       setForm(EMPTY_FORM);
       onOpenChange(false);
     },
@@ -171,8 +175,8 @@ function EditPlanDialog({ plan, open, onOpenChange }) {
     }),
     onSuccess: () => {
       toast.success('Plan updated.');
-      qc.invalidateQueries({ queryKey: ['plans'] });
-      qc.invalidateQueries({ queryKey: ['plans-summary'] });
+      qc.refetchQueries({ queryKey: ['plans'] });
+      qc.refetchQueries({ queryKey: ['plans-summary'] });
       onOpenChange(false);
     },
     onError: (err) => toast.error(err.response?.data?.message || 'Failed to update plan.'),
@@ -209,8 +213,8 @@ function DeletePlanDialog({ plan, open, onOpenChange }) {
         ? `"${plan.name}" has members — marked as inactive.`
         : `"${plan.name}" deleted.`;
       toast.success(msg);
-      qc.invalidateQueries({ queryKey: ['plans'] });
-      qc.invalidateQueries({ queryKey: ['plans-summary'] });
+      qc.refetchQueries({ queryKey: ['plans'] });
+      qc.refetchQueries({ queryKey: ['plans-summary'] });
       onOpenChange(false);
     },
     onError: (err) => toast.error(err.response?.data?.message || 'Delete failed.'),
@@ -246,29 +250,184 @@ function DeletePlanDialog({ plan, open, onOpenChange }) {
 
 // ─── Plans Page ───────────────────────────────────────────────────────────────
 export default function PlansPage() {
-  const [search, setSearch]         = useState('');
-  const [status, setStatus]         = useState('');
-  const [sort, setSort]             = useState('');
+  const qc                          = useQueryClient();
   const [addOpen, setAddOpen]       = useState(false);
   const [editTarget, setEditTarget] = useState(null);
   const [delTarget, setDelTarget]   = useState(null);
 
+  // Stable refs so Tabulator action formatters always call latest setters
+  const editRef = useRef(setEditTarget);
+  const delRef  = useRef(setDelTarget);
+  editRef.current = setEditTarget;
+  delRef.current  = setDelTarget;
+
+  // ── Seed mutation ─────────────────────────────────────────────────────────
+  const seedMutation = useMutation({
+    mutationFn: () => planApi.seed(),
+    onSuccess: (res) => {
+      const { created, skipped } = res.data.data;
+      if (created === 0) {
+        toast.info(skipped > 0 ? 'All member plans already exist.' : 'No member plans found to seed.');
+      } else {
+        toast.success(
+          `${created} plan(s) seeded from member data.${skipped > 0 ? ` (${skipped} already existed)` : ''}`,
+        );
+      }
+      qc.refetchQueries({ queryKey: ['plans'] });
+      qc.refetchQueries({ queryKey: ['plans-summary'] });
+    },
+    onError: (err) => toast.error(err.response?.data?.message || 'Seed failed.'),
+  });
+
+  // ── Queries ───────────────────────────────────────────────────────────────
   const { data: summary } = useQuery({
     queryKey: ['plans-summary'],
     queryFn: () => planApi.summary().then((r) => r.data.data),
   });
 
   const { data, isLoading, isError } = useQuery({
-    queryKey: ['plans', search, status, sort],
-    queryFn: () =>
-      planApi.list({
-        search:  search  || undefined,
-        status:  status  || undefined,
-        sort:    sort    || undefined,
-      }).then((r) => r.data.data),
-    keepPreviousData: true,
+    queryKey: ['plans'],
+    queryFn: () => planApi.list().then((r) => r.data.data),
   });
 
+  // ── Tabulator column defs ─────────────────────────────────────────────────
+  const columns = useMemo(() => [
+    {
+      title: 'Plan Name',
+      field: 'name',
+      minWidth: 160,
+      sorter: 'string',
+      headerFilter: 'input',
+      headerFilterPlaceholder: 'Filter name…',
+    },
+    {
+      title: 'Price',
+      field: 'price',
+      minWidth: 110,
+      sorter: 'number',
+      hozAlign: 'right',
+      headerHozAlign: 'right',
+      headerFilter: 'number',
+      headerFilterPlaceholder: '≥ price',
+      headerFilterFunc: '>=',
+      formatter: (cell) => fmtAmount(cell.getValue()),
+    },
+    {
+      title: 'Duration (days)',
+      field: 'duration_days',
+      minWidth: 130,
+      sorter: 'number',
+      hozAlign: 'center',
+      headerHozAlign: 'center',
+      headerFilter: 'number',
+      headerFilterPlaceholder: '≥ days',
+      headerFilterFunc: '>=',
+    },
+    {
+      title: 'Active Members',
+      field: 'active_members',
+      minWidth: 130,
+      sorter: 'number',
+      hozAlign: 'center',
+      headerHozAlign: 'center',
+      headerFilter: 'number',
+      headerFilterPlaceholder: '≥ members',
+      headerFilterFunc: '>=',
+    },
+    {
+      title: 'Revenue',
+      field: 'revenue_generated',
+      minWidth: 120,
+      sorter: 'number',
+      hozAlign: 'right',
+      headerHozAlign: 'right',
+      headerFilter: false,
+      formatter: (cell) => fmtRevenue(cell.getValue()),
+    },
+    {
+      title: 'Status',
+      field: 'status',
+      minWidth: 110,
+      sorter: 'string',
+      hozAlign: 'center',
+      headerHozAlign: 'center',
+      headerFilter: 'select',
+      headerFilterParams: {
+        values: { '': 'All', active: 'Active', inactive: 'Inactive' },
+        clearable: true,
+      },
+      formatter: (cell) => {
+        const v = cell.getValue();
+        const isActive = v === 'active';
+        const span = document.createElement('span');
+        span.textContent = v;
+        span.style.cssText = `
+          display: inline-flex;
+          align-items: center;
+          padding: 2px 8px;
+          border-radius: 9999px;
+          font-size: 11px;
+          font-weight: 500;
+          background: ${isActive ? '#dcfce7' : '#f3f4f6'};
+          color: ${isActive ? '#166534' : '#6b7280'};
+        `;
+        return span;
+      },
+    },
+    {
+      title: 'Actions',
+      field: 'id',
+      minWidth: 110,
+      hozAlign: 'center',
+      headerHozAlign: 'center',
+      headerSort: false,
+      headerFilter: false,
+      formatter: (cell) => {
+        const row  = cell.getRow().getData();
+        const wrap = document.createElement('div');
+        wrap.style.cssText = 'display:flex;gap:4px;justify-content:center;align-items:center;';
+
+        const editBtn = document.createElement('button');
+        editBtn.title = 'Edit';
+        editBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg> Edit`;
+        editBtn.style.cssText = `
+          display:inline-flex;align-items:center;gap:3px;padding:3px 8px;
+          border:1px solid #e2e8f0;border-radius:6px;font-size:11px;
+          background:#fff;cursor:pointer;color:#374151;
+        `;
+        editBtn.onmouseenter = () => { editBtn.style.background = '#f8fafc'; };
+        editBtn.onmouseleave = () => { editBtn.style.background = '#fff'; };
+        editBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          editRef.current(row);
+        });
+
+        const delBtn = document.createElement('button');
+        delBtn.title = 'Delete';
+        delBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>`;
+        delBtn.style.cssText = `
+          display:inline-flex;align-items:center;padding:3px 6px;
+          border:1px solid #fecaca;border-radius:6px;font-size:11px;
+          background:#fff;cursor:pointer;color:#ef4444;
+        `;
+        delBtn.onmouseenter = () => { delBtn.style.background = '#fef2f2'; };
+        delBtn.onmouseleave = () => { delBtn.style.background = '#fff'; };
+        delBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          delRef.current(row);
+        });
+
+        wrap.appendChild(editBtn);
+        wrap.appendChild(delBtn);
+        return wrap;
+      },
+    },
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  ], []);
+
+  const tableData = data?.plans ?? [];
+
+  // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div className="space-y-5">
 
@@ -302,107 +461,45 @@ export default function PlansPage() {
       </div>
 
       {/* Toolbar */}
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-center gap-2 flex-wrap">
-          <Input
-            placeholder="Search plan name…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="w-48 h-8 text-sm"
-          />
-          <Select value={status || 'all'} onValueChange={(v) => setStatus(v === 'all' ? '' : v)}>
-            <SelectTrigger className="w-32 h-8 text-sm">
-              <SelectValue placeholder="Status" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Status</SelectItem>
-              <SelectItem value="active">Active</SelectItem>
-              <SelectItem value="inactive">Inactive</SelectItem>
-            </SelectContent>
-          </Select>
-          <Select value={sort || 'default'} onValueChange={(v) => setSort(v === 'default' ? '' : v)}>
-            <SelectTrigger className="w-40 h-8 text-sm">
-              <SelectValue placeholder="Sort by" />
-            </SelectTrigger>
-            <SelectContent>
-              {SORT_OPTIONS.map((o) => (
-                <SelectItem key={o.value || 'default'} value={o.value || 'default'}>{o.label}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-xs text-muted-foreground">
+          {tableData.length > 0 ? `${tableData.length} plan${tableData.length !== 1 ? 's' : ''}` : ''}
+        </p>
+        <div className="flex items-center gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => seedMutation.mutate()}
+            disabled={seedMutation.isPending}
+            title="Auto-create plans from existing member data"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 mr-1 ${seedMutation.isPending ? 'animate-spin' : ''}`} />
+            {seedMutation.isPending ? 'Seeding…' : 'Seed from members'}
+          </Button>
+          <Button size="sm" onClick={() => setAddOpen(true)}>
+            <Plus className="h-4 w-4 mr-1" />
+            Add plan
+          </Button>
         </div>
-        <Button size="sm" onClick={() => setAddOpen(true)}>
-          <Plus className="h-4 w-4 mr-1" />
-          Add plan
-        </Button>
       </div>
 
-      {/* Table */}
+      {/* States */}
       {isLoading && <LoadingSpinner />}
       {isError   && <ErrorState message="Failed to load plans." />}
 
-      {data && data.plans.length === 0 && !isLoading && (
-        <div className="rounded-lg border border-dashed p-12 text-center">
-          <p className="text-muted-foreground text-sm">No plans yet.</p>
-          <p className="text-xs text-muted-foreground mt-1">
-            Click &quot;Add plan&quot; to create your first membership plan.
-          </p>
-        </div>
-      )}
-
-      {data && data.plans.length > 0 && (
-        <div className="rounded-lg border overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b bg-muted/20">
-                <th className="text-left px-4 py-2.5 font-medium text-muted-foreground">Plan Name</th>
-                <th className="text-center px-4 py-2.5 font-medium text-muted-foreground">Duration</th>
-                <th className="text-right px-4 py-2.5 font-medium text-muted-foreground">Price</th>
-                <th className="text-center px-4 py-2.5 font-medium text-muted-foreground">Active Members</th>
-                <th className="text-right px-4 py-2.5 font-medium text-muted-foreground">Revenue Generated</th>
-                <th className="text-center px-4 py-2.5 font-medium text-muted-foreground">Status</th>
-                <th className="text-center px-4 py-2.5 font-medium text-muted-foreground">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y">
-              {data.plans.map((p) => (
-                <tr key={p.id} className="hover:bg-muted/10 transition-colors">
-                  <td className="px-4 py-2.5 font-medium">{p.name}</td>
-                  <td className="px-4 py-2.5 text-center text-muted-foreground">{p.duration_days} days</td>
-                  <td className="px-4 py-2.5 text-right font-medium">{fmtAmount(p.price)}</td>
-                  <td className="px-4 py-2.5 text-center">{p.active_members}</td>
-                  <td className="px-4 py-2.5 text-right text-green-600 font-medium">
-                    {fmtAmount(p.revenue_generated)}
-                  </td>
-                  <td className="px-4 py-2.5 text-center">
-                    <Badge variant={p.status === 'active' ? 'default' : 'secondary'}>
-                      {p.status}
-                    </Badge>
-                  </td>
-                  <td className="px-4 py-2.5">
-                    <div className="flex items-center justify-center gap-1">
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        className="h-7 px-2"
-                        onClick={() => setEditTarget(p)}
-                      >
-                        <Pencil className="h-3 w-3" />
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        className="h-7 px-2 text-red-500 hover:text-red-600"
-                        onClick={() => setDelTarget(p)}
-                      >
-                        <Trash2 className="h-3 w-3" />
-                      </Button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      {/* Table */}
+      {!isLoading && !isError && (
+        <div className="rounded-lg border overflow-hidden">
+          <TabulatorTable
+            columns={columns}
+            data={tableData}
+            height="520px"
+            options={{
+              placeholder: tableData.length === 0
+                ? 'No plans yet. Click "Add plan" or "Seed from members".'
+                : 'No matching plans.',
+            }}
+          />
         </div>
       )}
 

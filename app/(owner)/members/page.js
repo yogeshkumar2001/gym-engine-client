@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useMemo, useCallback } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import dynamic from 'next/dynamic';
 import { memberApi, planApi, ownerApi } from '@/lib/api';
@@ -22,7 +22,7 @@ import {
 import { toast } from 'sonner';
 import {
   Users, UserCheck, UserX, Clock,
-  Plus, Download, RefreshCw, ChevronDown, Pencil, Trash2,
+  Plus, Download, RefreshCw, ChevronDown, Pencil, Trash2, Upload,
 } from 'lucide-react';
 
 // ─── Tabulator (client only) ──────────────────────────────────────────────────
@@ -89,6 +89,8 @@ async function exportData(format) {
     downloadBlob(new Blob([html], { type: 'application/vnd.ms-excel' }), 'members.xls');
   }
 }
+
+const PAGE_SIZE = 20;
 
 // ─── Filters ──────────────────────────────────────────────────────────────────
 const FILTERS = [
@@ -406,14 +408,154 @@ function ExpiryBadge({ expiryDate }) {
   return <span>{fmtDate(expiryDate)}</span>;
 }
 
+// ─── Import Dialog ────────────────────────────────────────────────────────────
+function ImportDialog({ open, onOpenChange, onImported }) {
+  const [file, setFile]         = useState(null);
+  const [loading, setLoading]   = useState(false);
+  const [result, setResult]     = useState(null); // { imported, total, failed[] }
+  const fileInputRef = useRef(null);
+  const qc = useQueryClient();
+
+  function reset() {
+    setFile(null);
+    setResult(null);
+  }
+
+  function handleClose(v) {
+    if (!v) reset();
+    onOpenChange(v);
+  }
+
+  function handleFileChange(e) {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    setFile(f);
+    setResult(null);
+  }
+
+  function handleDownloadTemplate() {
+    const csv = 'name,phone,plan_name,plan_amount,join_date,expiry_date,plan_duration_days\n';
+    downloadBlob(new Blob([csv], { type: 'text/csv' }), 'members_template.csv');
+  }
+
+  async function handleImport() {
+    if (!file) return;
+    setLoading(true);
+    setResult(null);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const res = await memberApi.import(fd);
+      const d = res.data.data;
+      setResult(d);
+      if (d.imported > 0) {
+        onImported();
+        toast.success(`${d.imported} members imported successfully.`);
+      }
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Import failed. Please check your file.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={handleClose}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Import Members</DialogTitle>
+        </DialogHeader>
+
+        <div className="space-y-4 py-2">
+          {/* File drop zone */}
+          <div
+            className="border-2 border-dashed rounded-lg p-8 text-center cursor-pointer hover:border-primary/50 transition-colors"
+            onClick={() => fileInputRef.current?.click()}
+          >
+            <Upload className="h-8 w-8 mx-auto text-muted-foreground mb-2" />
+            {file ? (
+              <p className="text-sm font-medium">{file.name}</p>
+            ) : (
+              <>
+                <p className="text-sm text-muted-foreground">Click to upload or drag &amp; drop</p>
+                <p className="text-xs text-muted-foreground mt-1">.xlsx, .xls, .csv — max 5 MB</p>
+              </>
+            )}
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".xlsx,.xls,.csv"
+              className="hidden"
+              onChange={handleFileChange}
+            />
+          </div>
+
+          {/* Required columns hint */}
+          <div className="text-xs text-muted-foreground space-y-1">
+            <p className="font-medium text-foreground">Required columns:</p>
+            <p className="font-mono bg-muted rounded px-2 py-1">
+              name, phone, plan_name, plan_amount, join_date, expiry_date
+            </p>
+            <p>Optional: <span className="font-mono">plan_duration_days</span> (defaults to 30)</p>
+          </div>
+
+          {/* Template download */}
+          <button
+            className="text-xs text-primary underline underline-offset-2"
+            onClick={handleDownloadTemplate}
+            type="button"
+          >
+            Download sample template (.csv)
+          </button>
+
+          {/* Result summary */}
+          {result && (
+            <div className={`rounded-lg p-3 text-sm space-y-2 ${result.failed.length === 0 ? 'bg-green-50 border border-green-200' : 'bg-orange-50 border border-orange-200'}`}>
+              <p className="font-medium">
+                {result.imported > 0 && `✅ ${result.imported} members imported`}
+                {result.failed.length > 0 && `  ❌ ${result.failed.length} rows failed`}
+              </p>
+              {result.failed.length > 0 && (
+                <div className="max-h-32 overflow-y-auto space-y-1">
+                  {result.failed.map((f) => (
+                    <p key={f.row} className="text-xs text-orange-700">
+                      Row {f.row}: {f.reason}
+                    </p>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={() => handleClose(false)} disabled={loading}>
+            {result ? 'Close' : 'Cancel'}
+          </Button>
+          {!result && (
+            <Button onClick={handleImport} disabled={!file || loading}>
+              {loading ? 'Importing…' : 'Import File'}
+            </Button>
+          )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ─── Members Page ─────────────────────────────────────────────────────────────
 export default function MembersPage() {
   const [filter, setFilter]       = useState('all');
   const [search, setSearch]       = useState('');
-  const [addOpen, setAddOpen]     = useState(false);
+  const [page, setPage]           = useState(1);
+  const [addOpen, setAddOpen]         = useState(false);
+  const [importOpen, setImportOpen]   = useState(false);
   const [editTarget, setEditTarget]     = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const qc = useQueryClient();
+
+  // Reset to page 1 whenever filter or search changes
+  useEffect(() => { setPage(1); }, [filter, search]);
 
   // ── Queries ────────────────────────────────────────────────────────────────
   const { data: summary } = useQuery({
@@ -422,14 +564,15 @@ export default function MembersPage() {
   });
 
   const { data, isLoading, isError } = useQuery({
-    queryKey: ['members', filter, search],
+    queryKey: ['members', filter, search, page],
     queryFn: () =>
       memberApi.list({
         filter: filter === 'all' ? undefined : filter,
         search: search || undefined,
-        limit: 200,
+        limit:  PAGE_SIZE,
+        offset: (page - 1) * PAGE_SIZE,
       }).then((r) => r.data.data),
-    keepPreviousData: true,
+    placeholderData: (prev) => prev,
   });
 
   const syncMutation = useMutation({
@@ -501,17 +644,19 @@ export default function MembersPage() {
             <RefreshCw className={`h-3 w-3 mr-1 ${syncMutation.isPending ? 'animate-spin' : ''}`} />
             Sync
           </Button>
+          <Button size="sm" variant="outline" onClick={() => setImportOpen(true)}>
+            <Upload className="h-3 w-3 mr-1" />
+            Import
+          </Button>
           <Button size="sm" onClick={() => setAddOpen(true)}>
             <Plus className="h-4 w-4 mr-1" />
             Add member
           </Button>
           <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button size="sm" variant="outline">
-                <Download className="h-3 w-3 mr-1" />
-                Export
-                <ChevronDown className="h-3 w-3 ml-1" />
-              </Button>
+            <DropdownMenuTrigger className="inline-flex items-center gap-1 h-8 px-3 text-xs font-medium border rounded-md bg-background hover:bg-accent hover:text-accent-foreground transition-colors">
+              <Download className="h-3 w-3" />
+              Export
+              <ChevronDown className="h-3 w-3" />
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
               <DropdownMenuItem onClick={() => handleExport('csv')}>Export CSV</DropdownMenuItem>
@@ -537,7 +682,10 @@ export default function MembersPage() {
       {data && data.members.length > 0 && (
         <div className="rounded-lg border overflow-x-auto">
           <div className="flex items-center justify-between px-4 py-2 border-b bg-muted/30">
-            <span className="text-xs text-muted-foreground">{data.total} members</span>
+            <span className="text-xs text-muted-foreground">
+              {data.total} member{data.total !== 1 ? 's' : ''} &mdash; showing{' '}
+              {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, data.total)}
+            </span>
             <span className="text-xs text-muted-foreground">Click Plan Name or Amount to edit inline</span>
           </div>
           <table className="w-full text-sm">
@@ -608,7 +756,70 @@ export default function MembersPage() {
         </div>
       )}
 
+      {/* Pagination */}
+      {data && data.total > PAGE_SIZE && (() => {
+        const totalPages = Math.ceil(data.total / PAGE_SIZE);
+
+        // Build visible page numbers: always show first, last, current ±1, with ellipsis
+        function pageNums() {
+          const nums = new Set([1, totalPages, page, page - 1, page + 1].filter((n) => n >= 1 && n <= totalPages));
+          const sorted = [...nums].sort((a, b) => a - b);
+          const result = [];
+          sorted.forEach((n, i) => {
+            if (i > 0 && n - sorted[i - 1] > 1) result.push('…');
+            result.push(n);
+          });
+          return result;
+        }
+
+        return (
+          <div className="flex items-center justify-between gap-2 pt-1">
+            <p className="text-xs text-muted-foreground">
+              Page {page} of {totalPages}
+            </p>
+            <div className="flex items-center gap-1">
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 px-2.5 text-xs"
+                onClick={() => setPage((p) => p - 1)}
+                disabled={page === 1}
+              >
+                ← Prev
+              </Button>
+
+              {pageNums().map((n, i) =>
+                n === '…' ? (
+                  <span key={`ellipsis-${i}`} className="px-1 text-xs text-muted-foreground select-none">…</span>
+                ) : (
+                  <Button
+                    key={n}
+                    size="sm"
+                    variant={n === page ? 'default' : 'outline'}
+                    className="h-7 w-7 text-xs p-0"
+                    onClick={() => setPage(n)}
+                  >
+                    {n}
+                  </Button>
+                )
+              )}
+
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 px-2.5 text-xs"
+                onClick={() => setPage((p) => p + 1)}
+                disabled={page === totalPages}
+              >
+                Next →
+              </Button>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Dialogs */}
+      <ImportDialog open={importOpen} onOpenChange={setImportOpen} onImported={invalidateMembers} />
       <AddMemberDialog open={addOpen} onOpenChange={setAddOpen} />
       {editTarget && (
         <EditMemberDialog

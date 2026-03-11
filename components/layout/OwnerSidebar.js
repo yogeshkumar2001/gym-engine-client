@@ -17,12 +17,14 @@ import {
   Settings,
   LogOut,
   Dumbbell,
+  Upload,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
 const NAV_ITEMS = [
   { href: '/dashboard',  label: 'Dashboard',  icon: LayoutDashboard },
   { href: '/members',    label: 'Members',     icon: Users },
+  { href: '/import',     label: 'Import',      icon: Upload },
   { href: '/plans',      label: 'Plans',       icon: ClipboardList },
   { href: '/renewals',   label: 'Renewals',    icon: RotateCcw },
   { href: '/invoices',   label: 'Invoices',    icon: FileText },
