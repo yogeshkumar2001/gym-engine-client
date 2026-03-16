@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useRouter } from 'next/navigation';
 import dynamic from 'next/dynamic';
 import { memberApi, planApi, ownerApi } from '@/lib/api';
 import StatCard from '@/components/shared/StatCard';
@@ -22,7 +23,8 @@ import {
 import { toast } from 'sonner';
 import {
   Users, UserCheck, UserX, Clock,
-  Plus, Download, RefreshCw, ChevronDown, Pencil, Trash2, Upload,
+  Plus, Download, RefreshCw, ChevronDown, Pencil, Upload,
+  MoreHorizontal, User, CreditCard,
 } from 'lucide-react';
 
 // ─── Tabulator (client only) ──────────────────────────────────────────────────
@@ -307,6 +309,82 @@ function EditMemberDialog({ member, open, onOpenChange }) {
   );
 }
 
+// ─── Mark Paid Dialog ─────────────────────────────────────────────────────────
+function MarkPaidDialog({ member, open, onOpenChange }) {
+  const qc = useQueryClient();
+  const [form, setForm] = useState({ payment_method: 'cash', amount: '' });
+
+  // Reset when member changes
+  const memberId = member?.id;
+  useMemo(() => { setForm({ payment_method: 'cash', amount: member?.plan_amount ?? '' }); }, [memberId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const mutation = useMutation({
+    mutationFn: () => memberApi.markPaid(member.id, {
+      payment_method: form.payment_method,
+      amount: parseFloat(form.amount),
+    }),
+    onSuccess: (res) => {
+      const expiry = fmtDate(res.data.data?.new_expiry);
+      toast.success(`Payment recorded. New expiry: ${expiry}`);
+      qc.invalidateQueries({ queryKey: ['members'] });
+      qc.invalidateQueries({ queryKey: ['members-summary'] });
+      onOpenChange(false);
+    },
+    onError: (err) => toast.error(err.response?.data?.message || 'Failed to record payment.'),
+  });
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-sm">
+        <DialogHeader>
+          <DialogTitle>Mark payment received</DialogTitle>
+        </DialogHeader>
+        <form onSubmit={(e) => { e.preventDefault(); mutation.mutate(); }}>
+          <div className="space-y-4 py-2">
+            <p className="text-sm text-muted-foreground">
+              Recording manual payment for <span className="font-semibold text-foreground">{member?.name}</span>.
+            </p>
+            <div className="space-y-2">
+              <Label htmlFor="mp-method">Payment method</Label>
+              <Select
+                value={form.payment_method}
+                onValueChange={(v) => setForm((p) => ({ ...p, payment_method: v }))}
+              >
+                <SelectTrigger id="mp-method">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="cash">Cash</SelectItem>
+                  <SelectItem value="upi">UPI</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="mp-amount">Amount (₹)</Label>
+              <Input
+                id="mp-amount"
+                type="number"
+                min="1"
+                step="0.01"
+                value={form.amount}
+                onChange={(e) => setForm((p) => ({ ...p, amount: e.target.value }))}
+                required
+                disabled={mutation.isPending}
+              />
+            </div>
+          </div>
+          <DialogFooter className="pt-2">
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+            <Button type="submit" disabled={mutation.isPending || !form.amount}>
+              {mutation.isPending ? 'Recording…' : 'Record payment'}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ─── Delete Confirm Dialog ────────────────────────────────────────────────────
 function DeleteConfirmDialog({ member, open, onOpenChange }) {
   const qc = useQueryClient();
@@ -548,10 +626,12 @@ export default function MembersPage() {
   const [filter, setFilter]       = useState('all');
   const [search, setSearch]       = useState('');
   const [page, setPage]           = useState(1);
-  const [addOpen, setAddOpen]         = useState(false);
-  const [importOpen, setImportOpen]   = useState(false);
+  const [addOpen, setAddOpen]           = useState(false);
+  const [importOpen, setImportOpen]     = useState(false);
   const [editTarget, setEditTarget]     = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
+  const [markPaidTarget, setMarkPaidTarget] = useState(null);
+  const router = useRouter();
   const qc = useQueryClient();
 
   // Reset to page 1 whenever filter or search changes
@@ -729,25 +809,28 @@ export default function MembersPage() {
                   <td className="px-4 py-2.5">
                     <ExpiryBadge expiryDate={m.expiry_date} />
                   </td>
-                  <td className="px-4 py-2.5">
-                    <div className="flex items-center justify-center gap-1">
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        className="h-7 px-2"
-                        onClick={() => setEditTarget(m)}
-                      >
-                        <Pencil className="h-3 w-3" />
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        className="h-7 px-2 text-red-500 hover:text-red-600"
-                        onClick={() => setDeleteTarget(m)}
-                      >
-                        <Trash2 className="h-3 w-3" />
-                      </Button>
-                    </div>
+                  <td className="px-4 py-2.5 text-center">
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button size="sm" variant="ghost" className="h-7 w-7 p-0">
+                          <MoreHorizontal className="h-4 w-4" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem onClick={() => router.push(`/members/${m.id}`)}>
+                          <User className="h-3.5 w-3.5 mr-2" />
+                          View Profile
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => setEditTarget(m)}>
+                          <Pencil className="h-3.5 w-3.5 mr-2" />
+                          Edit Member
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => setMarkPaidTarget(m)}>
+                          <CreditCard className="h-3.5 w-3.5 mr-2" />
+                          Mark Payment Received
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   </td>
                 </tr>
               ))}
@@ -833,6 +916,13 @@ export default function MembersPage() {
           member={deleteTarget}
           open={!!deleteTarget}
           onOpenChange={(v) => { if (!v) setDeleteTarget(null); }}
+        />
+      )}
+      {markPaidTarget && (
+        <MarkPaidDialog
+          member={markPaidTarget}
+          open={!!markPaidTarget}
+          onOpenChange={(v) => { if (!v) setMarkPaidTarget(null); }}
         />
       )}
     </div>

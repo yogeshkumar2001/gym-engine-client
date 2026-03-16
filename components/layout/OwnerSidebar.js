@@ -15,6 +15,7 @@ import {
   TrendingUp,
   BarChart2,
   Settings,
+  ToggleRight,
   LogOut,
   Dumbbell,
   Upload,
@@ -30,7 +31,8 @@ const NAV_ITEMS = [
   { href: '/invoices',   label: 'Invoices',    icon: FileText },
   { href: '/leads',      label: 'Lead Funnel', icon: TrendingUp },
   { href: '/analytics',  label: 'Analytics',   icon: BarChart2 },
-  { href: '/settings',   label: 'Settings',    icon: Settings },
+  { href: '/settings',          label: 'Settings',    icon: Settings },
+  { href: '/settings/services', label: 'Services',    icon: ToggleRight },
 ];
 
 export default function OwnerSidebar() {
@@ -59,7 +61,7 @@ export default function OwnerSidebar() {
             href={href}
             className={cn(
               'flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors',
-              pathname.startsWith(href)
+              (href === '/settings' ? pathname === href : pathname.startsWith(href))
                 ? 'bg-primary text-primary-foreground'
                 : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
             )}
