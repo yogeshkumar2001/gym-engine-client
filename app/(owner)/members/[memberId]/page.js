@@ -3,7 +3,7 @@
 import { useState, useMemo } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { memberApi } from '@/lib/api';
+import { memberApi, attendanceApi } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -16,7 +16,7 @@ import {
 import { toast } from 'sonner';
 import {
   ArrowLeft, User, ShieldCheck, CalendarDays, Phone,
-  CreditCard, Clock, CheckCircle2, XCircle, AlertCircle,
+  CreditCard, Clock, CheckCircle2, XCircle, AlertCircle, Activity,
 } from 'lucide-react';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -102,6 +102,12 @@ export default function MemberProfilePage() {
   const { data, isLoading, error } = useQuery({
     queryKey: ['member', memberId],
     queryFn:  () => memberApi.get(memberId).then((r) => r.data.data),
+    enabled:  !!memberId,
+  });
+
+  const { data: attendanceStats } = useQuery({
+    queryKey: ['member-attendance-stats', memberId],
+    queryFn:  () => attendanceApi.memberStats(memberId).then((r) => r.data.data),
     enabled:  !!memberId,
   });
 
@@ -238,6 +244,20 @@ export default function MemberProfilePage() {
                     {fmtDate(member.expiry_date)}
                   </p>
                   {isExpired && <p className="text-xs text-red-500">Expired</p>}
+                </div>
+              </div>
+              <div className="flex items-start gap-2 text-muted-foreground">
+                <Activity className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-xs text-muted-foreground">Attendance</p>
+                  <p className="font-medium text-foreground">
+                    {attendanceStats ? `${attendanceStats.total_visits} visits` : '—'}
+                  </p>
+                  {attendanceStats?.last_visit && (
+                    <p className="text-xs text-muted-foreground">
+                      Last: {fmtDate(attendanceStats.last_visit)}
+                    </p>
+                  )}
                 </div>
               </div>
             </div>

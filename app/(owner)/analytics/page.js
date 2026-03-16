@@ -13,7 +13,7 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   LineChart, Line, Legend,
 } from 'recharts';
-import { IndianRupee, Users, TrendingUp, AlertTriangle } from 'lucide-react';
+import { IndianRupee, Users, TrendingUp, AlertTriangle, Activity } from 'lucide-react';
 
 const TabulatorTable = dynamic(() => import('@/components/shared/TabulatorTable'), { ssr: false });
 
@@ -189,6 +189,128 @@ function PlansSection() {
   );
 }
 
+// ── Retention Section ─────────────────────────────────────────────────────────
+// Heatmap cell: white → green gradient based on pct (0–100)
+function heatColor(pct) {
+  if (pct === 0) return 'bg-muted text-muted-foreground';
+  if (pct >= 75) return 'bg-green-600 text-white';
+  if (pct >= 50) return 'bg-green-400 text-white';
+  if (pct >= 25) return 'bg-green-200 text-green-900';
+  return 'bg-green-50 text-green-800';
+}
+
+function RetentionSection() {
+  const { data: cohortData, isLoading: cohortLoading, isError: cohortError } = useQuery({
+    queryKey: ['cohorts'],
+    queryFn: () => ownerAnalyticsApi.cohorts().then((r) => r.data.data),
+  });
+
+  const { data: retentionData, isLoading: retLoading, isError: retError } = useQuery({
+    queryKey: ['retention'],
+    queryFn: () => ownerAnalyticsApi.retention().then((r) => r.data.data),
+  });
+
+  const retentionChartData = retentionData?.curve?.map((pt) => ({
+    name: `Mo ${pt.month}`,
+    rate: Math.round(pt.retention_rate * 100),
+    count: pt.retained_count,
+  }));
+
+  // Determine how many month columns to show (trim trailing zero-only columns)
+  const maxMonthCol = (() => {
+    if (!cohortData || cohortData.length === 0) return 6;
+    let max = 0;
+    for (const cohort of cohortData) {
+      for (const m of cohort.months) {
+        if (m.count > 0 && m.month > max) max = m.month;
+      }
+    }
+    return Math.max(max, 3);
+  })();
+
+  return (
+    <section className="space-y-6">
+      <h3 className="text-lg font-semibold flex items-center gap-2">
+        <Activity className="h-5 w-5" /> Retention Analysis
+      </h3>
+
+      {/* Retention curve chart */}
+      {(retLoading) && <LoadingSpinner />}
+      {retError && <ErrorState message="Failed to load retention curve." />}
+      {retentionData && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-sm font-medium">
+              Retention Curve — % of members who renewed by each month milestone
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="flex gap-6 mb-4 text-sm text-muted-foreground">
+              <span>Total members: <strong className="text-foreground">{retentionData.total_members}</strong></span>
+            </div>
+            <ResponsiveContainer width="100%" height={220}>
+              <LineChart data={retentionChartData}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                <XAxis dataKey="name" tick={{ fontSize: 12 }} />
+                <YAxis domain={[0, 100]} tick={{ fontSize: 12 }} tickFormatter={(v) => `${v}%`} />
+                <Tooltip formatter={(v, name) => name === 'rate' ? `${v}%` : v} />
+                <Legend />
+                <Line type="monotone" dataKey="rate" name="Retention %" stroke="#22c55e" strokeWidth={2} dot={{ r: 4 }} />
+                <Line type="monotone" dataKey="count" name="Members retained" stroke="#3b82f6" strokeWidth={2} dot={{ r: 4 }} />
+              </LineChart>
+            </ResponsiveContainer>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Cohort heatmap */}
+      {cohortLoading && <LoadingSpinner />}
+      {cohortError && <ErrorState message="Failed to load cohort data." />}
+      {cohortData && cohortData.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-sm font-medium">
+              Cohort Heatmap — % of cohort members who renewed each month
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="overflow-x-auto">
+            <table className="text-xs w-full border-collapse">
+              <thead>
+                <tr>
+                  <th className="text-left py-1 pr-3 font-medium text-muted-foreground whitespace-nowrap">Cohort</th>
+                  <th className="py-1 px-1 text-center font-medium text-muted-foreground">Size</th>
+                  {Array.from({ length: maxMonthCol + 1 }, (_, i) => (
+                    <th key={i} className="py-1 px-1 text-center font-medium text-muted-foreground">
+                      M{i}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {cohortData.map((cohort) => (
+                  <tr key={cohort.cohort_month} className="border-t border-border/40">
+                    <td className="py-1 pr-3 font-mono text-muted-foreground whitespace-nowrap">{cohort.cohort_month}</td>
+                    <td className="py-1 px-1 text-center">{cohort.size}</td>
+                    {cohort.months.slice(0, maxMonthCol + 1).map((m) => (
+                      <td key={m.month} className={`py-1 px-1 text-center rounded ${heatColor(m.pct)}`}>
+                        {m.pct > 0 ? `${m.pct}%` : '—'}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <p className="mt-3 text-xs text-muted-foreground">M0 = join month · M1 = first renewal month · darker green = higher retention</p>
+          </CardContent>
+        </Card>
+      )}
+      {cohortData && cohortData.length === 0 && (
+        <p className="text-sm text-muted-foreground">No member data available yet.</p>
+      )}
+    </section>
+  );
+}
+
 // ── Page ─────────────────────────────────────────────────────────────────────
 export default function AnalyticsPage() {
   return (
@@ -197,6 +319,7 @@ export default function AnalyticsPage() {
       <ForecastSection />
       <LtvSection />
       <PlansSection />
+      <RetentionSection />
     </div>
   );
 }

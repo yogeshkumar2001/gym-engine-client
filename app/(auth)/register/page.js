@@ -48,8 +48,8 @@ export default function RegisterPage() {
         phone: form.phone.trim(),
         pin: form.pin,
       });
-      const { token, gym_id, onboarding_token } = data.data;
-      setOwner(token, gym_id);
+      const { token, gym_id, gym_ids, onboarding_token } = data.data;
+      setOwner(token, gym_id, gym_ids);
       Cookies.set('onboarding_token', onboarding_token, { expires: 1, sameSite: 'strict' });
       toast.success('Gym registered! Connect your credentials next.');
       router.replace('/onboarding');

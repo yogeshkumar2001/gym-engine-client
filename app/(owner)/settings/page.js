@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ownerApi, discountApi } from '@/lib/api';
+import { ownerApi, discountApi, upiApi } from '@/lib/api';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -10,7 +10,7 @@ import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { toast } from 'sonner';
-import { CheckCircle, XCircle, HelpCircle, Percent } from 'lucide-react';
+import { CheckCircle, XCircle, HelpCircle, Percent, Smartphone } from 'lucide-react';
 
 function CredBadge({ valid }) {
   if (valid === null || valid === undefined)
@@ -200,6 +200,84 @@ function DiscountSettingsCard() {
   );
 }
 
+// ─── UPI Settings Card ────────────────────────────────────────────────────────
+function UpiSettingsCard() {
+  const qc = useQueryClient();
+  const [upiId, setUpiId] = useState('');
+  const [loaded, setLoaded] = useState(false);
+
+  const { isLoading } = useQuery({
+    queryKey: ['upi-settings'],
+    queryFn: () => upiApi.get().then((r) => r.data.data),
+    onSuccess: (data) => {
+      setUpiId(data.upi_id ?? '');
+      setLoaded(true);
+    },
+  });
+
+  const mutation = useMutation({
+    mutationFn: () => upiApi.update({ upi_id: upiId.trim() || null }),
+    onSuccess: () => {
+      toast.success('UPI settings saved.');
+      qc.invalidateQueries({ queryKey: ['upi-settings'] });
+    },
+    onError: (err) => toast.error(err.response?.data?.message || 'Failed to save.'),
+  });
+
+  const isValidUpi = upiId === '' || /^[a-zA-Z0-9._-]+@[a-zA-Z0-9]+$/.test(upiId.trim());
+
+  if (isLoading && !loaded) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2"><Smartphone className="h-4 w-4" />UPI Payments</CardTitle>
+        </CardHeader>
+        <CardContent><Skeleton className="h-10 w-full" /></CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Smartphone className="h-4 w-4" />
+          UPI Payments
+        </CardTitle>
+        <CardDescription>
+          Add your UPI ID to send UPI deep links in WhatsApp renewal reminders.
+          Used when Razorpay payments are disabled. Members tap the link to pay directly.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="space-y-1.5">
+          <Label htmlFor="upi_id" className="text-xs">UPI ID</Label>
+          <Input
+            id="upi_id"
+            placeholder="yourname@upi"
+            value={upiId}
+            onChange={(e) => setUpiId(e.target.value)}
+            disabled={mutation.isPending}
+          />
+          {upiId && !isValidUpi && (
+            <p className="text-xs text-destructive">Invalid UPI ID. Expected format: name@bank</p>
+          )}
+          <p className="text-xs text-muted-foreground">
+            Leave blank to disable UPI reminders. Example: gymowner@okaxis
+          </p>
+        </div>
+        <Button
+          onClick={() => mutation.mutate()}
+          disabled={!isValidUpi || mutation.isPending}
+          size="sm"
+        >
+          {mutation.isPending ? 'Saving…' : 'Save UPI settings'}
+        </Button>
+      </CardContent>
+    </Card>
+  );
+}
+
 // ─── Main page ────────────────────────────────────────────────────────────────
 export default function SettingsPage() {
   const qc = useQueryClient();
@@ -275,6 +353,7 @@ export default function SettingsPage() {
       </Card>
 
       <DiscountSettingsCard />
+      <UpiSettingsCard />
     </div>
   );
 }

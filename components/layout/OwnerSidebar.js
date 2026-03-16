@@ -7,6 +7,13 @@ import useAuthStore from '@/store/authStore';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import {
   LayoutDashboard,
   Users,
   ClipboardList,
@@ -19,8 +26,13 @@ import {
   LogOut,
   Dumbbell,
   Upload,
+  CalendarCheck,
+  Crown,
+  Building2,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { useQuery } from '@tanstack/react-query';
+import { ownerApi } from '@/lib/api';
 
 const NAV_ITEMS = [
   { href: '/dashboard',  label: 'Dashboard',  icon: LayoutDashboard },
@@ -31,6 +43,8 @@ const NAV_ITEMS = [
   { href: '/invoices',   label: 'Invoices',    icon: FileText },
   { href: '/leads',      label: 'Lead Funnel', icon: TrendingUp },
   { href: '/analytics',  label: 'Analytics',   icon: BarChart2 },
+  { href: '/attendance', label: 'Attendance',  icon: CalendarCheck },
+  { href: '/subscription',       label: 'Subscription', icon: Crown },
   { href: '/settings',          label: 'Settings',    icon: Settings },
   { href: '/settings/services', label: 'Services',    icon: ToggleRight },
 ];
@@ -39,6 +53,18 @@ export default function OwnerSidebar() {
   const pathname = usePathname();
   const router = useRouter();
   const logout = useAuthStore((s) => s.logout);
+  const gymIds = useAuthStore((s) => s.gymIds);
+  const activeGymId = useAuthStore((s) => s.activeGymId);
+  const switchGym = useAuthStore((s) => s.switchGym);
+
+  const isMultiGym = Array.isArray(gymIds) && gymIds.length > 1;
+
+  const { data: gymsData } = useQuery({
+    queryKey: ['my-gyms'],
+    queryFn: () => ownerApi.myGyms().then((r) => r.data.data),
+    enabled: isMultiGym,
+    staleTime: 5 * 60 * 1000,
+  });
 
   function handleLogout() {
     logout();
@@ -46,13 +72,40 @@ export default function OwnerSidebar() {
     router.replace('/login');
   }
 
+  function handleGymSwitch(gymId) {
+    switchGym(parseInt(gymId, 10));
+    router.refresh();
+  }
+
   return (
     <aside className="flex flex-col w-60 min-h-screen bg-white border-r px-3 py-4">
       {/* Logo */}
-      <div className="flex items-center gap-2 px-3 mb-6">
+      <div className="flex items-center gap-2 px-3 mb-4">
         <Dumbbell className="h-6 w-6 text-primary" />
         <span className="font-bold text-lg tracking-tight">GymEngine</span>
       </div>
+
+      {/* Gym switcher — only shown when owner has access to multiple gyms */}
+      {isMultiGym && (
+        <div className="px-1 mb-4">
+          <Select
+            value={String(activeGymId)}
+            onValueChange={handleGymSwitch}
+          >
+            <SelectTrigger className="w-full h-8 text-xs">
+              <Building2 className="h-3.5 w-3.5 mr-1.5 shrink-0" />
+              <SelectValue placeholder="Select gym" />
+            </SelectTrigger>
+            <SelectContent>
+              {(gymsData ?? gymIds.map((id) => ({ id, name: `Gym ${id}` }))).map((gym) => (
+                <SelectItem key={gym.id} value={String(gym.id)} className="text-xs">
+                  {gym.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      )}
 
       <nav className="flex-1 space-y-1">
         {NAV_ITEMS.map(({ href, label, icon: Icon }) => (

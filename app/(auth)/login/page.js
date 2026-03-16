@@ -24,7 +24,7 @@ export default function LoginPage() {
     setLoading(true);
     try {
       const { data } = await authApi.login(phone, pin);
-      setOwner(data.data.token, data.data.gym_id);
+      setOwner(data.data.token, data.data.gym_id, data.data.gym_ids);
       toast.success('Welcome back!');
       router.replace('/dashboard');
     } catch (err) {
