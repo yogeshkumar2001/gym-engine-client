@@ -2,14 +2,15 @@
 
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ownerApi } from '@/lib/api';
+import { ownerApi, discountApi } from '@/lib/api';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
+import { Skeleton } from '@/components/ui/skeleton';
 import { toast } from 'sonner';
-import { CheckCircle, XCircle, HelpCircle } from 'lucide-react';
+import { CheckCircle, XCircle, HelpCircle, Percent } from 'lucide-react';
 
 function CredBadge({ valid }) {
   if (valid === null || valid === undefined)
@@ -77,6 +78,129 @@ const SECTIONS = [
   },
 ];
 
+// ─── Discount Settings Card ───────────────────────────────────────────────────
+function DiscountSettingsCard() {
+  const qc = useQueryClient();
+  const [form, setForm] = useState(null);
+
+  const { isLoading } = useQuery({
+    queryKey: ['discount-settings'],
+    queryFn: () => discountApi.get().then((r) => r.data.data),
+    onSuccess: (data) => {
+      setForm({
+        recovery_discount_percent:    String(data.recovery_discount_percent    ?? 5),
+        reactivation_discount_percent: String(data.reactivation_discount_percent ?? 10),
+      });
+    },
+  });
+
+  const mutation = useMutation({
+    mutationFn: () => discountApi.update({
+      recovery_discount_percent:    Number(form.recovery_discount_percent),
+      reactivation_discount_percent: Number(form.reactivation_discount_percent),
+    }),
+    onSuccess: () => {
+      toast.success('Discount settings saved.');
+      qc.invalidateQueries({ queryKey: ['discount-settings'] });
+    },
+    onError: (err) => toast.error(err.response?.data?.message || 'Failed to save.'),
+  });
+
+  function validate(val) {
+    const n = Number(val);
+    return Number.isFinite(n) && n >= 0 && n <= 50;
+  }
+
+  const isValid = form && validate(form.recovery_discount_percent) && validate(form.reactivation_discount_percent);
+
+  if (isLoading || !form) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2"><Percent className="h-4 w-4" />Recovery Discounts</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <Skeleton className="h-10 w-full" />
+          <Skeleton className="h-10 w-full" />
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Percent className="h-4 w-4" />
+          Recovery Discounts
+        </CardTitle>
+        <CardDescription>
+          Control the automatic discount offered to members during renewal recovery and win-back campaigns.
+          Set to 0 to disable discounts entirely.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-5">
+        <div className="grid grid-cols-2 gap-4">
+          <div className="space-y-1.5">
+            <Label htmlFor="recovery_pct" className="text-xs">
+              Recovery Discount (%)
+            </Label>
+            <div className="relative">
+              <Input
+                id="recovery_pct"
+                type="number"
+                min="0"
+                max="50"
+                step="1"
+                value={form.recovery_discount_percent}
+                onChange={(e) => setForm((p) => ({ ...p, recovery_discount_percent: e.target.value }))}
+                disabled={mutation.isPending}
+                className="pr-8"
+              />
+              <span className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">%</span>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Applied at recovery Step 2 (Day +4 follow-up). Range: 0–50%.
+            </p>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="reactivation_pct" className="text-xs">
+              Win-back Discount (%)
+            </Label>
+            <div className="relative">
+              <Input
+                id="reactivation_pct"
+                type="number"
+                min="0"
+                max="50"
+                step="1"
+                value={form.reactivation_discount_percent}
+                onChange={(e) => setForm((p) => ({ ...p, reactivation_discount_percent: e.target.value }))}
+                disabled={mutation.isPending}
+                className="pr-8"
+              />
+              <span className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">%</span>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Offered to churned members in win-back campaigns. Range: 0–50%.
+            </p>
+          </div>
+        </div>
+
+        <Button
+          onClick={() => mutation.mutate()}
+          disabled={!isValid || mutation.isPending}
+          size="sm"
+        >
+          {mutation.isPending ? 'Saving…' : 'Save discount settings'}
+        </Button>
+      </CardContent>
+    </Card>
+  );
+}
+
+// ─── Main page ────────────────────────────────────────────────────────────────
 export default function SettingsPage() {
   const qc = useQueryClient();
   const [form, setForm] = useState({});
@@ -105,6 +229,7 @@ export default function SettingsPage() {
   return (
     <div className="space-y-6 max-w-2xl">
       <h2 className="text-2xl font-bold tracking-tight">Settings</h2>
+
 
       <Card>
         <CardHeader>
@@ -148,6 +273,8 @@ export default function SettingsPage() {
           </Button>
         </CardContent>
       </Card>
+
+      <DiscountSettingsCard />
     </div>
   );
 }
